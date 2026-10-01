@@ -1,0 +1,20 @@
+#!/bin/sh
+
+set -e
+
+if [ "$1" = "remove" ]; then
+    deluser --remove-home stassh
+    rmdir --ignore-fail-on-non-empty /etc/stassh
+    rmdir --ignore-fail-on-non-empty /var/lib/stassh
+    systemctl daemon-reload
+fi
+
+if [ "$1" = "purge" ]; then
+    rm -rf /etc/stassh
+    rm -rf /var/lib/stassh
+    systemctl daemon-reload
+fi
+
+#DEBHELPER#
+
+

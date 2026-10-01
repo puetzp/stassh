@@ -1,0 +1,23 @@
+#!/bin/sh
+
+set -e
+
+if [ "$1" = "configure" ]; then
+    adduser --shell /bin/sh --system --group --disabled-password --home /home/stassh stassh
+
+    mkdir -p /home/stassh/.ssh
+    chown stassh:stassh /home/stassh/.ssh
+
+    mkdir -p /var/lib/stassh/data
+    chown -R stassh:stassh /var/lib/stassh
+    chmod 755 /var/lib/stassh
+
+    mkdir -p /etc/stassh
+    chmod 755 /etc/stassh
+
+    systemctl enable stassh-authorized-keys.path
+    systemctl start stassh-authorized-keys.path
+    systemctl start stassh-authorized-keys.service
+fi
+
+#DEBHELPER#

@@ -1,0 +1,25 @@
+# This sshd_config snippet integrates stassh with OpenSSH.
+#
+# It is commented by default so as not to interfere with the currently
+# running configuration. The main OpenSSH configuration might also contain
+# directives that are incompatible with the configuration below,
+# and might need to be adjusted before activating it.
+#
+# The `ExposeAuthInfo` and `ForceCommand` directives are required.
+# The `AuthenticationMethods` directive can be skipped if it is
+# the same in the main configuration. Note however that stassh
+# only works with `PubkeyAuthentication`. Requiring multiple
+# different keys for authentication as in
+#
+# AuthenticationMethods publickey,publickey
+#
+# is also not explicitly supported.
+#
+# Disabling `Banner` ensures that a printed secret is not intermixed
+# with a server banner presented by OpenSSH.
+
+# Match User stassh
+#   Banner none
+#   ForceCommand /usr/bin/stassh
+#   ExposeAuthInfo yes
+#   AuthenticationMethods publickey

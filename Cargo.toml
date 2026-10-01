@@ -1,0 +1,27 @@
+[package]
+name = "stassh"
+version = "0.1.0"
+edition = "2024"
+authors = ["Peter Sebastian Puetz <ppuetz@protonmail.com>"]
+description = "SSH-based password and secret management"
+readme = "README.md"
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4.6", features = ["cargo"] }
+shlex = "2.0"
+
+[package.metadata.deb]
+extended-description = "SSH-based password and secret management"
+section = "admin"
+priority = "optional"
+maintainer-scripts = "deb/"
+assets = [
+       ["target/release/stassh", "/usr/bin/stassh", "755"],
+       ["apparmor/usr.bin.stassh", "/etc/apparmor.d/usr.bin.stassh", "644"],
+       ["files/sshd_config", "/etc/ssh/sshd_config.d/stassh.conf", "644"],
+       ["files/stassh-authorized-keys.path", "/etc/systemd/system/stassh-authorized-keys.path", "644"],
+       ["files/stassh-authorized-keys.service", "/etc/systemd/system/stassh-authorized-keys.service", "644"],
+]
+depends = "$auto, bsdutils, yq, openssh-server, systemd"

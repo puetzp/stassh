@@ -1,0 +1,10 @@
+[Unit]
+Description=stassh user authorized_keys generator
+ConditionPathExists=/etc/stassh/users.yml
+ConditionFileIsExecutable=/usr/bin/yq
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/yq 'map(.ssh_keys) | flatten | join("\n")' /etc/stassh/users.yml --raw-output
+StandardOutput=truncate:/home/stassh/.ssh/authorized_keys
+StandardError=journal

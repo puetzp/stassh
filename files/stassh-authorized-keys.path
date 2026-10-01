@@ -1,0 +1,8 @@
+[Unit]
+Description=stassh user authorized_keys generator
+
+[Path]
+PathModified=/etc/stassh/users.yml
+
+[Install]
+WantedBy=multi-user.target

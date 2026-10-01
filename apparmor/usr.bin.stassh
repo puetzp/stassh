@@ -1,0 +1,12 @@
+abi <abi/3.0>,
+
+include <tunables/global>
+
+/usr/bin/stassh {
+  include <abstractions/base>
+
+  /usr/bin/stassh mr,
+  owner /etc/stassh/** r,
+  owner /var/lib/stassh/** w,
+
+}
