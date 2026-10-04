@@ -74,7 +74,7 @@ fn main() -> Result<(), anyhow::Error> {
         match error.downcast::<error::UserError>() {
             Ok(_error) => anyhow::bail!(_error),
             Err(_error) => {
-                log::error(timer, None, &_error)?;
+                log::error(timer, Some(&user), &_error)?;
                 anyhow::bail!("internal server error");
             }
         }
@@ -202,8 +202,14 @@ fn run(lock_file: &Path, data_dir: &PathBuf, user: &User) -> Result<(), anyhow::
     // if the command can be executed safely.
     // In our case all arguments from the command line are passed
     // to the clap parser for validation.
-    let original_command = std::env::var("SSH_ORIGINAL_COMMAND")
-        .context("failed to read command supplied by the user from SSH_ORIGINAL_COMMAND")?;
+    let original_command = {
+        let var = "SSH_ORIGINAL_COMMAND";
+
+        std::env::var(var).context(format!(
+            "failed to read command supplied by the user from environment variable `{}`",
+            var
+        ))?
+    };
 
     // Split the command line passed to the application by
     // ForceCommand into separate tokens, mimicking shell-escaping
@@ -327,19 +333,24 @@ fn run(lock_file: &Path, data_dir: &PathBuf, user: &User) -> Result<(), anyhow::
 fn process(data_dir: &PathBuf, verb: Verb, user: &User) -> Result<(), anyhow::Error> {
     match verb {
         Verb::Create { path } => {
-            execute::create(data_dir, &user, &path)?;
+            execute::create(data_dir, &user, &path)
+                .context(format!("failed to create secret `{}`", path))?;
         }
         Verb::Update { path, create } => {
-            execute::update(data_dir, &user, &path, create)?;
+            execute::update(data_dir, &user, &path, create)
+                .context(format!("failed to update secret `{}`", path))?;
         }
         Verb::Delete { path, force } => {
-            execute::delete(data_dir, &user, &path, force)?;
+            execute::delete(data_dir, &user, &path, force)
+                .context(format!("failed to delete secret `{}`", path))?;
         }
         Verb::Get { path, trim } => {
-            execute::get(data_dir, &user, &path, trim)?;
+            execute::get(data_dir, &user, &path, trim)
+                .context(format!("failed to get secret `{}`", path))?;
         }
         Verb::List { path } => {
-            execute::list(data_dir, &user, &path)?;
+            execute::list(data_dir, &user, &path)
+                .context(format!("failed to list secrets at `{}`", path))?;
         }
     }
 

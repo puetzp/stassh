@@ -1,4 +1,7 @@
-use crate::types::{PrefixedPath, User};
+use crate::{
+    error,
+    types::{PrefixedPath, User},
+};
 use anyhow::Context;
 use std::{
     fs,
@@ -12,38 +15,50 @@ use std::{
 /// the user's ssh client.
 pub fn create(data_dir: &PathBuf, user: &User, path: &PrefixedPath) -> Result<(), anyhow::Error> {
     if !user.can_write(path) {
-        anyhow::bail!("permission denied")
+        anyhow::bail!(error::UserError::new("permission denied".to_string()))
     }
 
     let real_path = path.prepend(user, data_dir)?;
 
-    if real_path
-        .try_exists()
-        .context("failed to check if secret exists")?
-    {
-        anyhow::bail!("secret already exists")
+    if real_path.try_exists().context(format!(
+        "failed to check if secret exists at `{}`",
+        real_path.display()
+    ))? {
+        anyhow::bail!(error::UserError::new(format!(
+            "secret `{}` already exists",
+            path
+        )));
     }
 
     if let Some(parent) = real_path.parent() {
-        fs::create_dir_all(parent).context("failed to create parent directory")?;
+        fs::create_dir_all(parent).context(format!(
+            "failed to create parent directory `{}` for secret `{}`",
+            parent.display(),
+            real_path.display()
+        ))?;
     }
 
-    let output = Command::new("systemd-creds")
-        .arg("--user")
-        .arg("encrypt")
-        .arg("-")
-        .arg(&real_path)
-        .stdin(Stdio::inherit())
+    let mut cmd = Command::new("systemd-creds");
+    cmd.arg("--user");
+    cmd.arg("encrypt");
+    cmd.arg("-");
+    cmd.arg(&real_path);
+    cmd.stdin(Stdio::inherit());
+
+    let output = cmd
         .output()
-        .context("failed to create secret")?;
+        .context(format!("failed to execute command `{:?}`", cmd))?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8(output.stderr)?;
+        let stderr = String::from_utf8(output.stderr).context(format!(
+            "failed to parse error output from command `{:?}` as utf-8",
+            cmd
+        ))?;
 
         if !stderr.is_empty() {
-            anyhow::bail!(anyhow::anyhow!(stderr).context("failed to create secret"))
+            anyhow::bail!(stderr);
         } else {
-            anyhow::bail!("failed to create secret")
+            anyhow::bail!("command `{:?}` failed but returned no error message", cmd);
         }
     }
 
@@ -60,39 +75,52 @@ pub fn update(
     create: bool,
 ) -> Result<(), anyhow::Error> {
     if !user.can_write(path) {
-        anyhow::bail!("permission denied")
+        anyhow::bail!(error::UserError::new("permission denied".to_string()))
     }
 
     let real_path = path.prepend(user, data_dir)?;
 
     if !create
-        && !real_path
-            .try_exists()
-            .context("failed to check if secret exists")?
+        && !real_path.try_exists().context(format!(
+            "failed to check if secret exists at `{}`",
+            real_path.display()
+        ))?
     {
-        anyhow::bail!("no such secret")
+        anyhow::bail!(error::UserError::new(format!(
+            "failed to update nonexistent secret `{}`; use `--create` wih `update` to create it first or use the `create` subcommand instead",
+            path
+        )));
     }
 
     if let Some(parent) = real_path.parent() {
-        fs::create_dir_all(parent).context("failed to create parent directory")?;
+        fs::create_dir_all(parent).context(format!(
+            "failed to create parent directory `{}` for secret `{}`",
+            parent.display(),
+            real_path.display()
+        ))?;
     }
 
-    let output = Command::new("systemd-creds")
-        .arg("--user")
-        .arg("encrypt")
-        .arg("-")
-        .arg(&real_path)
-        .stdin(Stdio::inherit())
+    let mut cmd = Command::new("systemd-creds");
+    cmd.arg("--user");
+    cmd.arg("encrypt");
+    cmd.arg("-");
+    cmd.arg(&real_path);
+    cmd.stdin(Stdio::inherit());
+
+    let output = cmd
         .output()
-        .context("failed to create secret")?;
+        .context(format!("failed to execute command `{:?}`", cmd))?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8(output.stderr)?;
+        let stderr = String::from_utf8(output.stderr).context(format!(
+            "failed to parse error output from command `{:?}` as utf-8",
+            cmd
+        ))?;
 
         if !stderr.is_empty() {
-            anyhow::bail!(anyhow::anyhow!(stderr).context("failed to create secret"))
+            anyhow::bail!(stderr);
         } else {
-            anyhow::bail!("failed to create secret")
+            anyhow::bail!("command `{:?}` failed but returned no error message", cmd);
         }
     }
 
@@ -109,33 +137,46 @@ pub fn delete(
     force: bool,
 ) -> Result<(), anyhow::Error> {
     if !user.can_write(path) {
-        anyhow::bail!("permission denied")
+        anyhow::bail!(error::UserError::new("permission denied".to_string()))
     }
 
     let real_path = path.prepend(user, data_dir)?;
 
-    if !real_path
-        .try_exists()
-        .context("failed to check if secret exists")?
-    {
-        anyhow::bail!("no such secret")
+    if !real_path.try_exists().context(format!(
+        "failed to check if secret exists at `{}`",
+        real_path.display()
+    ))? {
+        anyhow::bail!(error::UserError::new(format!(
+            "cannot delete nonexistent secret `{}`",
+            path
+        )));
     }
 
     if real_path.is_file() {
-        fs::remove_file(&real_path).context("failed to delete secret")?;
+        fs::remove_file(&real_path)
+            .context(format!("failed to delete file `{}`", real_path.display()))?;
     } else if real_path.is_dir() {
         if force {
-            fs::remove_dir_all(&real_path).context("failed to delete directory")?;
+            fs::remove_dir_all(&real_path).context(format!(
+                "failed to delete directory `{}`",
+                real_path.display()
+            ))?;
         } else {
             let count = fs::read_dir(&real_path)
-                .context("failed to stat directory")?
+                .context(format!(
+                    "failed to read entries in directory `{}`",
+                    real_path.display()
+                ))?
                 .filter_map(|entry| entry.ok())
                 .count();
 
             if count > 0 {
-                anyhow::bail!("failed to delete non-empty directory, use --force to force removal or delete secrets first");
+                anyhow::bail!(error::UserError::new(format!("failed to delete non-empty directory `{}`, use --force to force removal or delete secrets first", path)));
             } else {
-                fs::remove_dir(&real_path).context("failed to delete directory")?;
+                fs::remove_dir(&real_path).context(format!(
+                    "failed to delete directory `{}`",
+                    real_path.display()
+                ))?;
             }
         }
     }
@@ -153,36 +194,47 @@ pub fn get(
     trim: bool,
 ) -> Result<(), anyhow::Error> {
     if !user.can_read(path) {
-        anyhow::bail!("permission denied")
+        anyhow::bail!(error::UserError::new("permission denied".to_string()))
     }
 
     let real_path = path.prepend(user, data_dir)?;
 
-    if !real_path
-        .try_exists()
-        .context("failed to check if secret exists")?
-    {
-        anyhow::bail!("no such secret")
+    if !real_path.try_exists().context(format!(
+        "failed to check if secret exists at `{}`",
+        real_path.display()
+    ))? {
+        anyhow::bail!(error::UserError::new(format!(
+            "failed to find secret `{}`",
+            path
+        )));
     }
 
-    let output = Command::new("systemd-creds")
-        .arg("--user")
-        .arg("decrypt")
-        .arg(&real_path)
-        .arg("-")
+    let mut cmd = Command::new("systemd-creds");
+    cmd.arg("--user");
+    cmd.arg("decrypt");
+    cmd.arg(&real_path);
+    cmd.arg("-");
+
+    let output = cmd
         .output()
-        .context("failed to create secret")?;
+        .context(format!("failed to execute command `{:?}`", cmd))?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8(output.stderr)?;
+        let stderr = String::from_utf8(output.stderr).context(format!(
+            "failed to parse error output from command `{:?}` as utf-8",
+            cmd
+        ))?;
 
         if !stderr.is_empty() {
-            anyhow::bail!(anyhow::anyhow!(stderr).context("failed to create secret"))
+            anyhow::bail!(stderr);
         } else {
-            anyhow::bail!("failed to create secret")
+            anyhow::bail!("command `{:?}` failed but returned no error message", cmd);
         }
     } else {
-        let stdout = String::from_utf8(output.stdout)?;
+        let stdout = String::from_utf8(output.stdout).context(format!(
+            "failed to parse standard output from command `{:?}` as utf-8",
+            cmd
+        ))?;
 
         if trim {
             print!("{}", stdout);
@@ -206,7 +258,7 @@ pub fn get(
 /// the prefixed path supplied by the user.
 pub fn list(data_dir: &PathBuf, user: &User, path: &PrefixedPath) -> Result<(), anyhow::Error> {
     if !user.can_read(path) {
-        anyhow::bail!("permission denied")
+        anyhow::bail!(error::UserError::new("permission denied".to_string()))
     }
 
     let real_path = path.prepend(user, data_dir)?;
@@ -238,11 +290,17 @@ pub fn list(data_dir: &PathBuf, user: &User, path: &PrefixedPath) -> Result<(), 
                 paths.push(_path);
 
                 for entry in fs::read_dir(&item)
-                    .context("failed to stat directory")?
+                    .context(format!(
+                        "failed to read entries in directory `{}`",
+                        item.display()
+                    ))?
                     .filter_map(|entry| entry.ok())
                 {
                     *item = entry.path();
-                    recurse(real_path_count, prefixed_path, paths, item)?;
+                    recurse(real_path_count, prefixed_path, paths, item).context(format!(
+                        "failed to parse paths in `{}` and add them to the output list",
+                        item.display()
+                    ))?;
                 }
             } else {
                 let mut _path = prefixed_path.clone();
@@ -262,7 +320,10 @@ pub fn list(data_dir: &PathBuf, user: &User, path: &PrefixedPath) -> Result<(), 
         Ok(())
     }
 
-    recurse(real_path_count, &path, &mut paths, &mut item)?;
+    recurse(real_path_count, &path, &mut paths, &mut item).context(format!(
+        "failed to parse paths in `{}` and add them to the output list",
+        item.display()
+    ))?;
 
     for path in paths {
         println!("{}", path);
