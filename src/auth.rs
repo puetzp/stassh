@@ -1,4 +1,4 @@
-use crate::types::User;
+use crate::{error::AuthenticationError, types::User};
 use anyhow::Context;
 use std::{env, fs, path::Path, process, str::FromStr};
 
@@ -25,39 +25,36 @@ use std::{env, fs, path::Path, process, str::FromStr};
 /// that is missing from the user database results in a error message to the
 /// client that the user could not be identified.
 pub fn authenticate(users_file: &Path) -> Result<User, anyhow::Error> {
-    let pubkey = {
+    fn extract_pubkey() -> Result<String, anyhow::Error> {
         let var = "SSH_USER_AUTH";
 
-        let value =
+        let file_path =
             env::var(var).context(format!("failed to read environment variable `{}`", var))?;
 
-        let content =
-            fs::read_to_string(&value).context(format!("failed to read file `{}`", value))?;
+        let file_content = fs::read_to_string(&file_path)
+            .context(format!("failed to read file `{}`", file_path))?;
 
         // Ensure the first part of the line matches the expected
         // authentication method, then take the next two parts
         // (the string identifying the key type and the key itself)
         // and discard the rest.
-        content
+        let pubkey = file_content
             .lines()
             .next()
             .map(|line| line.split_whitespace().collect::<Vec<&str>>())
             .filter(|item| item.first().is_some_and(|i| *i == "publickey"))
             .and_then(|item| item.get(1..3).map(|slice| slice.join(" ")))
-            .ok_or(anyhow::anyhow!("failed to determine user"))?
-    };
+            .ok_or(anyhow::anyhow!(
+                "failed to extract SSH public key from file `{}`",
+                file_path
+            ))?;
 
-    // TODO: Use halt_error or something similar to modify the exit code when more
-    // than one result is produced. Also check the exit code in the code to
-    // differentiate between yq usage or compile errors and the "business logic"
-    // error of having more than one filter result.
-    // Depending on the type of error, the user should get different messages and
-    // `logger` should produce different error messages as well to pinpoint the
-    // actual problem with user authentication.
+        Ok(pubkey)
+    }
 
-    let user = {
-        let error = format!("failed to determine user using public key `{}`", pubkey);
+    let pubkey = extract_pubkey().context(AuthenticationError::new(None))?;
 
+    fn determine_user(users_file: &Path, pubkey: &str) -> Result<User, anyhow::Error> {
         // This yq invocation searches for an item whose `ssh_keys` contain the
         // SSH key from OpenSSH's `ExposeAuthInfo` file.
         // If found, it returns multiple lines of output:
@@ -70,6 +67,11 @@ pub fn authenticate(users_file: &Path) -> Result<User, anyhow::Error> {
         // The `--exit-status` flag ensures that the program fails when the yq
         // filter does not yield any result, which means the user could not be
         // authenticated.
+        //
+        // TODO: Use halt_error or something similar to modify the exit code when more
+        // than one result is produced. Also check the exit code in the code to
+        // differentiate between yq usage or compile errors and the "business logic"
+        // error of having more than one filter result.
         let output = process::Command::new("yq")
             .arg("--raw-output")
             .arg("--exit-status")
@@ -78,22 +80,32 @@ pub fn authenticate(users_file: &Path) -> Result<User, anyhow::Error> {
                 pubkey
             ))
             .arg(&users_file)
-            .output()
-            .context(error.clone())?;
+            .output().context("failed to execute yq")?;
 
         if !output.status.success() {
-            let stderr = String::from_utf8(output.stderr)?;
+            let stderr =
+                String::from_utf8(output.stderr).context("failed to convert yq output to utf-8")?;
 
             if !stderr.is_empty() {
-                anyhow::bail!(anyhow::anyhow!(stderr).context(error.clone()))
+                anyhow::bail!(anyhow::anyhow!(stderr));
             } else {
-                anyhow::bail!(error)
+                anyhow::bail!("yq filter returned an error but no error message")
             }
         } else {
             // Create the user object from the yq output described above.
-            User::from_str(String::from_utf8(output.stdout)?.trim())?
+            let user = User::from_str(
+                String::from_utf8(output.stdout)
+                    .context("failed to convert yq output to utf-8")?
+                    .trim(),
+            )
+            .context("failed to parse user from yq output")?;
+
+            Ok(user)
         }
-    };
+    }
+
+    let user =
+        determine_user(users_file, &pubkey).context(AuthenticationError::new(Some(&pubkey)))?;
 
     Ok(user)
 }

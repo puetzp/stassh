@@ -1,4 +1,5 @@
 mod auth;
+mod error;
 mod execute;
 mod log;
 mod types;
@@ -39,11 +40,11 @@ fn main() -> Result<(), anyhow::Error> {
     // other errors that may appear later on, because at this
     // stage the user is unauthenticated. The error is also
     // returned to the user by bailing on it right after.
-    let user = match auth::authenticate(&users_file).context("failed to authenticate user") {
+    let user = match auth::authenticate(&users_file) {
         Ok(user) => user,
         Err(error) => {
             log::error(timer, None, &error)?;
-            anyhow::bail!(error);
+            anyhow::bail!(error.downcast::<error::AuthenticationError>()?)
         }
     };
 
