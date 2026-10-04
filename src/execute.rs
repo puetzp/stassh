@@ -18,6 +18,13 @@ pub fn create(data_dir: &PathBuf, user: &User, path: &PrefixedPath) -> Result<()
         anyhow::bail!(error::UserError::new("permission denied".to_string()))
     }
 
+    if path.is_root() {
+        anyhow::bail!(error::UserError::new(format!(
+            "cannot create secret `{}` because it matches the path of the root directory",
+            path
+        )));
+    }
+
     let real_path = path.prepend(user, data_dir)?;
 
     match fs::metadata(&real_path) {
@@ -196,7 +203,7 @@ pub fn delete(
         real_path.display()
     ))? {
         anyhow::bail!(error::UserError::new(format!(
-            "cannot delete nonexistent secret `{}`",
+            "cannot delete nonexistent secret or directory `{}`",
             path
         )));
     }

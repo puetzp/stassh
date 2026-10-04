@@ -3,7 +3,7 @@ use std::{
     ffi::OsStr,
     fmt,
     ops::Deref,
-    path::{Component, PathBuf},
+    path::{Component, Path, PathBuf},
     str::FromStr,
 };
 
@@ -247,6 +247,13 @@ impl fmt::Display for PrefixedPath {
 }
 
 impl PrefixedPath {
+    pub fn is_root(&self) -> bool {
+        match self {
+            Self::Private(path) => *path == Path::new("/"),
+            Self::Public(path) => *path == Path::new("/"),
+        }
+    }
+
     /// This converts a user-supplied prefixed path to a real filesystem
     /// path by prepending the data directory path.
     pub fn prepend(&self, user: &User, parent: &PathBuf) -> Result<PathBuf, anyhow::Error> {
