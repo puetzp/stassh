@@ -36,3 +36,9 @@ impl fmt::Display for UserError {
         write!(f, "{}", self.message)
     }
 }
+
+impl UserError {
+    pub fn new(message: String) -> Self {
+        Self { message }
+    }
+}

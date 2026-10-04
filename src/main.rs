@@ -209,7 +209,10 @@ fn run(lock_file: &Path, data_dir: &PathBuf, user: &User) -> Result<(), anyhow::
     // ForceCommand into separate tokens, mimicking shell-escaping
     // and considering quoted, multi-word arguments.
     let words =
-        shlex::split(&original_command).ok_or(anyhow::anyhow!("failed to parse arguments"))?;
+        shlex::split(&original_command).ok_or(anyhow::anyhow!(error::UserError::new(format!(
+            "failed to parse arguments from command `{}` in a POSIX-like manner, e.g. due to wrong quoting",
+            original_command
+        ))))?;
 
     // Let clap parse the command line arguments and panic when
     // it fails. This is fine at this stage where the lock does
