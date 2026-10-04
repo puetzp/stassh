@@ -4,7 +4,7 @@ use crate::{
 };
 use anyhow::Context;
 use std::{
-    fs,
+    fs, io,
     path::PathBuf,
     process::{Command, Stdio},
 };
@@ -20,22 +20,42 @@ pub fn create(data_dir: &PathBuf, user: &User, path: &PrefixedPath) -> Result<()
 
     let real_path = path.prepend(user, data_dir)?;
 
-    if real_path.try_exists().context(format!(
-        "failed to check if secret exists at `{}`",
-        real_path.display()
-    ))? {
-        anyhow::bail!(error::UserError::new(format!(
-            "secret `{}` already exists",
-            path
-        )));
+    match fs::metadata(&real_path) {
+        Ok(metadata) => {
+            if metadata.is_dir() {
+                anyhow::bail!(error::UserError::new(format!(
+                    "cannot create secret `{}` because the same path already refers to a directory ",
+                    path
+                )));
+            } else {
+                anyhow::bail!(error::UserError::new(format!(
+                    "secret `{}` already exists",
+                    path
+                )));
+            }
+        }
+        Err(error) => {
+            if error.kind() != io::ErrorKind::NotFound {
+                anyhow::bail!(anyhow::anyhow!(error).context(format!(
+                    "failed to query metadata about path `{}`",
+                    real_path.display()
+                )));
+            }
+        }
     }
 
     if let Some(parent) = real_path.parent() {
-        fs::create_dir_all(parent).context(format!(
-            "failed to create parent directory `{}` for secret `{}`",
+        if !real_path.try_exists().context(format!(
+            "failed to check if parent directory `{}` for secret `{}` exists",
             parent.display(),
             real_path.display()
-        ))?;
+        ))? {
+            fs::create_dir_all(parent).context(format!(
+                "failed to create parent directory `{}` for secret `{}`",
+                parent.display(),
+                real_path.display()
+            ))?;
+        }
     }
 
     let mut cmd = Command::new("systemd-creds");
@@ -56,7 +76,9 @@ pub fn create(data_dir: &PathBuf, user: &User, path: &PrefixedPath) -> Result<()
         ))?;
 
         if !stderr.is_empty() {
-            anyhow::bail!(stderr);
+            anyhow::bail!(
+                anyhow::anyhow!(stderr).context(format!("command `{:?}` returned an error", cmd))
+            );
         } else {
             anyhow::bail!("command `{:?}` failed but returned no error message", cmd);
         }
@@ -80,24 +102,49 @@ pub fn update(
 
     let real_path = path.prepend(user, data_dir)?;
 
-    if !create
-        && !real_path.try_exists().context(format!(
-            "failed to check if secret exists at `{}`",
-            real_path.display()
-        ))?
-    {
-        anyhow::bail!(error::UserError::new(format!(
-            "failed to update nonexistent secret `{}`; use `--create` wih `update` to create it first or use the `create` subcommand instead",
-            path
+    match fs::metadata(&real_path) {
+        Ok(metadata) => {
+            if create && metadata.is_dir() {
+                anyhow::bail!(error::UserError::new(format!(
+                    "cannot create secret `{}` because the same path already refers to a directory",
+                    path
+                )));
+            }
+
+            if metadata.is_dir() {
+                anyhow::bail!(error::UserError::new(format!(
+                    "cannot update secret `{}` because this path refers to a directory instead of a file",
+                    path
+                )))
+            }
+        }
+        Err(error) => {
+            if error.kind() == io::ErrorKind::NotFound {
+                anyhow::bail!(error::UserError::new(format!(
+                    "failed to update nonexistent secret `{}`; use `--create` wih `update` to create it first or use the `create` subcommand instead",
+                    path
         )));
+            } else {
+                anyhow::bail!(anyhow::anyhow!(error).context(format!(
+                    "failed to query metadata about path `{}`",
+                    real_path.display()
+                )));
+            }
+        }
     }
 
     if let Some(parent) = real_path.parent() {
-        fs::create_dir_all(parent).context(format!(
-            "failed to create parent directory `{}` for secret `{}`",
+        if !real_path.try_exists().context(format!(
+            "failed to check if parent directory `{}` for secret `{}` exists",
             parent.display(),
             real_path.display()
-        ))?;
+        ))? {
+            fs::create_dir_all(parent).context(format!(
+                "failed to create parent directory `{}` for secret `{}`",
+                parent.display(),
+                real_path.display()
+            ))?;
+        }
     }
 
     let mut cmd = Command::new("systemd-creds");
@@ -118,7 +165,9 @@ pub fn update(
         ))?;
 
         if !stderr.is_empty() {
-            anyhow::bail!(stderr);
+            anyhow::bail!(
+                anyhow::anyhow!(stderr).context(format!("command `{:?}` returned an error", cmd))
+            );
         } else {
             anyhow::bail!("command `{:?}` failed but returned no error message", cmd);
         }
@@ -226,7 +275,9 @@ pub fn get(
         ))?;
 
         if !stderr.is_empty() {
-            anyhow::bail!(stderr);
+            anyhow::bail!(
+                anyhow::anyhow!(stderr).context(format!("command `{:?}` returned an error", cmd))
+            );
         } else {
             anyhow::bail!("command `{:?}` failed but returned no error message", cmd);
         }
