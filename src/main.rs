@@ -38,22 +38,46 @@ fn main() -> Result<(), anyhow::Error> {
     // directive from OpenSSH.
     // When this fails the error is logged differently than any
     // other errors that may appear later on, because at this
-    // stage the user is unauthenticated. The error is also
-    // returned to the user by bailing on it right after.
+    // stage the user is unauthenticated. Only a part of the
+    // error chain is returned to the user.
     let user = match auth::authenticate(&users_file) {
         Ok(user) => user,
         Err(error) => {
             log::error(timer, None, &error)?;
-            anyhow::bail!(error.downcast::<error::AuthenticationError>()?)
+
+            match error.downcast::<error::AuthenticationError>() {
+                Ok(_error) => anyhow::bail!(_error),
+                Err(_error) => {
+                    log::error(timer, None, &_error)?;
+                    anyhow::bail!("internal server error");
+                }
+            }
         }
     };
 
     // Pass errors from the wrapped "main" function to
-    // the logging system. Then bail on the error, thus
-    // returning it to the user.
+    // the logging system. Only a part of the error chain
+    // us returned to the user, depending on if the user
+    // action caused the error and is thus recoverable
+    // by adjusting the command sent via SSH. Unrecoverable
+    // errors are not returned to the user because the no
+    // amount of information enables the user to solve the
+    // problem themselves.
+    // This could be the case when:
+    // * a bug is encountered
+    // * not all requirements are fulfilled that the
+    //   application can function properly, e.g. changed
+    //   filesystem permissions.
     if let Err(error) = run(&lock_file, &data_dir, &user) {
         log::error(timer, Some(&user), &error)?;
-        anyhow::bail!(error);
+
+        match error.downcast::<error::UserError>() {
+            Ok(_error) => anyhow::bail!(_error),
+            Err(_error) => {
+                log::error(timer, None, &_error)?;
+                anyhow::bail!("internal server error");
+            }
+        }
     }
 
     Ok(())
@@ -70,10 +94,14 @@ fn main() -> Result<(), anyhow::Error> {
 fn run(lock_file: &Path, data_dir: &PathBuf, user: &User) -> Result<(), anyhow::Error> {
     // Let another mechanism create the parent directory, but ensure
     // the data directory exists before continuing.
-    if let Err(error) = fs::create_dir(&data_dir) {
-        if error.kind() != io::ErrorKind::AlreadyExists {
-            Err(error)?;
-        }
+    if !data_dir.try_exists().context(format!(
+        "failed to determine if data directory `{}` exists",
+        &data_dir.display()
+    ))? {
+        fs::create_dir(&data_dir).context(format!(
+            "failed to create data directory `{}`",
+            data_dir.display()
+        ))?;
     }
 
     // Build the command and subcommand tree using the builder

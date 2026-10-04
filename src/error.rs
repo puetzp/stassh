@@ -25,3 +25,14 @@ impl AuthenticationError {
         }
     }
 }
+
+#[derive(Debug)]
+pub struct UserError {
+    message: String,
+}
+
+impl fmt::Display for UserError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
