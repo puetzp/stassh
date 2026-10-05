@@ -1,4 +1,4 @@
-use anyhow::Context;
+use serde::{Deserialize, Deserializer};
 use std::{
     ffi::OsStr,
     fmt,
@@ -19,11 +19,20 @@ pub enum Verb {
     List { path: PrefixedPath },
 }
 
+/// The user attributes contain all user information minus
+/// the user name.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct UserAttributes {
+    pub ssh_keys: Vec<String>,
+    #[serde(default)]
+    pub permissions: Vec<Permission>,
+}
+
 /// The user object contains the username and a set of permissions.
 /// The username must adhere to a few rules however as seen in the
 /// `FromStr` implementation.
-/// The permission set is a sorted list of paths and a boolean flag
-/// that indicates if a path is writable.
+/// The permission set is a list of paths and a boolean flag that
+/// indicates if a path is writable.
 /// When more than one permission is relevant to determine if a user
 /// is allowed to modify an item at a given path, the most significant
 /// permission, as determined by its path, wins.
@@ -32,67 +41,7 @@ pub enum Verb {
 #[derive(Clone, Debug, PartialEq)]
 pub struct User {
     pub name: Username,
-    pub permissions: Vec<Permission>,
-}
-
-impl FromStr for User {
-    type Err = anyhow::Error;
-
-    /// This parses a string in the format
-    ///
-    /// ```
-    /// <username>
-    /// <write> <path>
-    /// <write> <path>
-    /// ...
-    /// ```
-    ///
-    /// The first line encodes the username while all subsequent
-    /// lines make up the set of permissions granted to the user.
-    /// The first part of such a line is a boolean flag indicating
-    /// write permissions, while the remainder is parsed as a path
-    /// that the write permission is applied to.
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut lines = s.lines();
-
-        let username = Username::from_str(
-            lines
-                .next()
-                .ok_or(anyhow::anyhow!("failed to extract username"))?,
-        )?;
-
-        let mut permissions = vec![];
-
-        for line in lines {
-            let (prefix, suffix) = line
-                .split_once(' ')
-                .ok_or(anyhow::anyhow!("failed to parse permission"))?;
-
-            let write = bool::from_str(prefix).context("failed to parse `write` as boolean")?;
-
-            let path = PathBuf::from_str(suffix).context("failed to parse `path`")?;
-
-            if !path.is_absolute() {
-                anyhow::bail!("path must be absolute");
-            }
-
-            if path
-                .components()
-                .any(|component| !matches!(component, Component::RootDir | Component::Normal(_)))
-            {
-                anyhow::bail!("path must not contain relative path components");
-            }
-
-            permissions.push(Permission { path, write });
-        }
-
-        permissions.sort_by(|a, b| b.path.cmp(&a.path));
-
-        Ok(Self {
-            name: username,
-            permissions,
-        })
-    }
+    pub attributes: UserAttributes,
 }
 
 impl User {
@@ -103,7 +52,8 @@ impl User {
         match path {
             PrefixedPath::Private(_) => true,
             PrefixedPath::Public(_path) => _path.ancestors().any(|ancestor| {
-                self.permissions
+                self.attributes
+                    .permissions
                     .iter()
                     .any(|permission| ancestor == permission.path)
             }),
@@ -113,16 +63,16 @@ impl User {
     /// Return `true` if any permission can be found that matches the
     /// most significant ancestor of the path and if this permission
     /// allows the user to write to this path.
-    /// Since the set of permissions is in reverse order, this guarantees
-    /// that write permissions can be fine-tuned to allow access only
-    /// to a nested path whose parent is barred from modification. This
-    /// way a user can create secrets in a nested path, but cannot create
-    /// new directories/groups/folders.
+    /// To that end a copy of the permission set is sorted in reverse order.
+    /// This guarantees that write permissions can be fine-tuned to allow
+    /// access only to a nested path whose parent is barred from modification.
+    /// This way a user can create secrets in a nested path, but cannot
+    /// necessarily create parent directories/groups/folders.
     pub fn can_write(&self, path: &PrefixedPath) -> bool {
         match path {
             PrefixedPath::Private(_) => true,
             PrefixedPath::Public(_path) => {
-                let mut permissions = self.permissions.clone();
+                let mut permissions = self.attributes.permissions.clone();
                 permissions.sort_by(|a, b| b.path.cmp(&a.path));
 
                 _path
@@ -139,7 +89,7 @@ impl User {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Username(String);
 
 impl FromStr for Username {
@@ -165,6 +115,16 @@ impl FromStr for Username {
     }
 }
 
+impl<'de> Deserialize<'de> for Username {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer)
+            .and_then(|s| Self::from_str(&s).map_err(serde::de::Error::custom))
+    }
+}
+
 impl fmt::Display for Username {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&*self.0, f)
@@ -185,9 +145,10 @@ impl Username {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct Permission {
     pub path: PathBuf,
+    #[serde(default)]
     pub write: bool,
 }
 
@@ -391,7 +352,10 @@ mod tests {
             let data_dir = PathBuf::from("/foo/bar");
             let user = User {
                 name: Username::from_str("someone")?,
-                permissions: vec![],
+                attributes: UserAttributes {
+                    ssh_keys: vec![],
+                    permissions: vec![],
+                },
             };
             let expected = Path::new("/foo/bar/private/someone/some/secret");
             assert_eq!(path.prepend(&user, &data_dir)?, expected);
@@ -402,7 +366,10 @@ mod tests {
             let data_dir = PathBuf::from("/foo/bar");
             let user = User {
                 name: Username::from_str("someone")?,
-                permissions: vec![],
+                attributes: UserAttributes {
+                    ssh_keys: vec![],
+                    permissions: vec![],
+                },
             };
             let expected = Path::new("/foo/bar/public/some/secret");
             assert_eq!(path.prepend(&user, &data_dir)?, expected);
@@ -424,58 +391,14 @@ mod tests {
     }
 
     #[test]
-    fn test_user_parsing() -> Result<(), anyhow::Error> {
-        {
-            let input = r#"my-name
-true /foo/bar
-false /foo/bar/foo
-true /bar
-false /bar/foo
-"#;
-            let user = User::from_str(input)?;
-            let expected = User {
-                name: Username("my-name".to_string()),
-                permissions: vec![
-                    Permission {
-                        path: PathBuf::from("/foo/bar/foo"),
-                        write: false,
-                    },
-                    Permission {
-                        path: PathBuf::from("/foo/bar"),
-                        write: true,
-                    },
-                    Permission {
-                        path: PathBuf::from("/bar/foo"),
-                        write: false,
-                    },
-                    Permission {
-                        path: PathBuf::from("/bar"),
-                        write: true,
-                    },
-                ],
-            };
-            assert!(user == expected);
-        }
-
-        {
-            let input = r#"my-name"#;
-            let user = User::from_str(input)?;
-            let expected = User {
-                name: Username("my-name".to_string()),
-                permissions: vec![],
-            };
-            assert!(user == expected);
-        }
-
-        Ok(())
-    }
-
-    #[test]
     fn test_user_can_read() -> Result<(), anyhow::Error> {
         {
             let user = User {
                 name: Username::from_str("me")?,
-                permissions: vec![],
+                attributes: UserAttributes {
+                    ssh_keys: vec![],
+                    permissions: vec![],
+                },
             };
 
             let path = PrefixedPath::from_str("pub:/")?;
@@ -486,7 +409,10 @@ false /bar/foo
         {
             let user = User {
                 name: Username::from_str("me")?,
-                permissions: vec![],
+                attributes: UserAttributes {
+                    ssh_keys: vec![],
+                    permissions: vec![],
+                },
             };
 
             let path = PrefixedPath::from_str("priv:/")?;
@@ -497,10 +423,13 @@ false /bar/foo
         {
             let user = User {
                 name: Username::from_str("me")?,
-                permissions: vec![Permission {
-                    path: PathBuf::from("/foo/bar"),
-                    write: false,
-                }],
+                attributes: UserAttributes {
+                    ssh_keys: vec![],
+                    permissions: vec![Permission {
+                        path: PathBuf::from("/foo/bar"),
+                        write: false,
+                    }],
+                },
             };
 
             let path = PrefixedPath::from_str("pub:/")?;
@@ -511,10 +440,13 @@ false /bar/foo
         {
             let user = User {
                 name: Username::from_str("me")?,
-                permissions: vec![Permission {
-                    path: PathBuf::from("/"),
-                    write: false,
-                }],
+                attributes: UserAttributes {
+                    ssh_keys: vec![],
+                    permissions: vec![Permission {
+                        path: PathBuf::from("/"),
+                        write: false,
+                    }],
+                },
             };
 
             let path = PrefixedPath::from_str("pub:/foo/bar")?;
@@ -530,7 +462,10 @@ false /bar/foo
         {
             let user = User {
                 name: Username::from_str("me")?,
-                permissions: vec![],
+                attributes: UserAttributes {
+                    ssh_keys: vec![],
+                    permissions: vec![],
+                },
             };
 
             let path = PrefixedPath::from_str("pub:/")?;
@@ -541,7 +476,10 @@ false /bar/foo
         {
             let user = User {
                 name: Username::from_str("me")?,
-                permissions: vec![],
+                attributes: UserAttributes {
+                    ssh_keys: vec![],
+                    permissions: vec![],
+                },
             };
 
             let path = PrefixedPath::from_str("priv:/")?;
@@ -552,7 +490,10 @@ false /bar/foo
         {
             let user = User {
                 name: Username::from_str("me")?,
-                permissions: vec![],
+                attributes: UserAttributes {
+                    ssh_keys: vec![],
+                    permissions: vec![],
+                },
             };
 
             let path = PrefixedPath::from_str("/")?;
@@ -563,16 +504,19 @@ false /bar/foo
         {
             let user = User {
                 name: Username::from_str("me")?,
-                permissions: vec![
-                    Permission {
-                        path: PathBuf::from("/"),
-                        write: false,
-                    },
-                    Permission {
-                        path: PathBuf::from("/foo/bar"),
-                        write: true,
-                    },
-                ],
+                attributes: UserAttributes {
+                    ssh_keys: vec![],
+                    permissions: vec![
+                        Permission {
+                            path: PathBuf::from("/"),
+                            write: false,
+                        },
+                        Permission {
+                            path: PathBuf::from("/foo/bar"),
+                            write: true,
+                        },
+                    ],
+                },
             };
 
             let path = PrefixedPath::from_str("pub:/foo/bar")?;
@@ -583,16 +527,19 @@ false /bar/foo
         {
             let user = User {
                 name: Username::from_str("me")?,
-                permissions: vec![
-                    Permission {
-                        path: PathBuf::from("/"),
-                        write: true,
-                    },
-                    Permission {
-                        path: PathBuf::from("/foo/bar"),
-                        write: false,
-                    },
-                ],
+                attributes: UserAttributes {
+                    ssh_keys: vec![],
+                    permissions: vec![
+                        Permission {
+                            path: PathBuf::from("/"),
+                            write: true,
+                        },
+                        Permission {
+                            path: PathBuf::from("/foo/bar"),
+                            write: false,
+                        },
+                    ],
+                },
             };
 
             let path = PrefixedPath::from_str("pub:/foo/bar")?;
@@ -603,10 +550,13 @@ false /bar/foo
         {
             let user = User {
                 name: Username::from_str("me")?,
-                permissions: vec![Permission {
-                    path: PathBuf::from("/"),
-                    write: true,
-                }],
+                attributes: UserAttributes {
+                    ssh_keys: vec![],
+                    permissions: vec![Permission {
+                        path: PathBuf::from("/"),
+                        write: true,
+                    }],
+                },
             };
 
             let path = PrefixedPath::from_str("pub:/foo/bar")?;

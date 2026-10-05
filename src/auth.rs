@@ -1,17 +1,21 @@
-use crate::{error::AuthenticationError, types::User};
+use crate::{
+    error::AuthenticationError,
+    types::{User, UserAttributes, Username},
+};
 use anyhow::Context;
-use std::{env, fs, path::Path, process, str::FromStr};
+use std::{collections::HashMap, env, fs, path::Path};
 
 /// This function reads the contents from the temporary file whose
 /// path is taken from the environment variable `SSH_USER_AUTH`.
 /// This file is created by OpenSSH when the `ExposeAuthInfo` option
 /// is enabled and contains the SSH public key that was used to
 /// authenticate the client.
-/// The public key is extracted from the temporary file and passed
-/// to a yq filter that searches the user database (another JSON file)
-/// for a user that is identified by this key.
+///
+/// The public key is extracted from the temporary file and compared
+/// with all users and their respective public keys in the user database
+/// (another JSON file) to find the user that is identified by this key.
 /// When no user can be found an errors is returned to the client.
-/// Otherwise the user name and permissions are parsed and the user
+/// Otherwise the user name and permissions are retainedd and the user
 /// object is returned to the caller to continue processing the user's input.
 ///
 /// Note that for this workflow to function properly, the user database
@@ -55,53 +59,40 @@ pub fn authenticate(users_file: &Path) -> Result<User, anyhow::Error> {
     let pubkey = extract_pubkey().context(AuthenticationError::new(None))?;
 
     fn determine_user(users_file: &Path, pubkey: &str) -> Result<User, anyhow::Error> {
-        // This yq invocation searches for an item whose `ssh_keys` contain the
-        // SSH key from OpenSSH's `ExposeAuthInfo` file.
-        // If found, it returns multiple lines of output:
-        // * the user name
-        // * followed by zero or more lines of permissions in the form
-        //   <write> <path>
-        //   where `write` is `true` or `false` to indicate if the user is
-        //   permitted to write to the path.
-        //
-        // The `--exit-status` flag ensures that the program fails when the yq
-        // filter does not yield any result, which means the user could not be
-        // authenticated.
-        //
-        // TODO: Use halt_error or something similar to modify the exit code when more
-        // than one result is produced. Also check the exit code in the code to
-        // differentiate between yq usage or compile errors and the "business logic"
-        // error of having more than one filter result.
-        let output = process::Command::new("yq")
-            .arg("--raw-output")
-            .arg("--exit-status")
-            .arg(format!(
-                "map_values(select(.ssh_keys[] | contains(\"{}\"))) as $match | if ($match | length == 1) then [($match | keys | first), ( $match | map(select(has(\"permissions\"))) | first | .permissions // {{}} | map(\"\\(.write // false) \\(.path)\") )] | flatten | join(\"\\n\") else false end",
-                pubkey
-            ))
-            .arg(&users_file)
-            .output().context("failed to execute yq")?;
+        let file_content = fs::read_to_string(&users_file).context(format!(
+            "failed to read user configuration from file `{}`",
+            users_file.display()
+        ))?;
 
-        if !output.status.success() {
-            let stderr =
-                String::from_utf8(output.stderr).context("failed to convert yq output to utf-8")?;
+        type Users = HashMap<Username, UserAttributes>;
 
-            if !stderr.is_empty() {
-                anyhow::bail!(anyhow::anyhow!(stderr));
-            } else {
-                anyhow::bail!("yq filter returned an error but no error message")
-            }
-        } else {
-            // Create the user object from the yq output described above.
-            let user = User::from_str(
-                String::from_utf8(output.stdout)
-                    .context("failed to convert yq output to utf-8")?
-                    .trim(),
-            )
-            .context("failed to parse user from yq output")?;
+        // Parse the complete file and all contained user entries, then
+        // filter the set of users and retain only those whose set of
+        // public keys matches the public key parsed from `SSH_USER_AUTH`.
+        let users: Users = strict_yaml_rust::serde::de::from_str::<Users>(&file_content)
+            .context(format!(
+                "failed to parse user configuration from file `{}`",
+                users_file.display()
+            ))?
+            .into_iter()
+            .filter(|(_, attributes)| attributes.ssh_keys.contains(&pubkey.to_string()))
+            .collect();
 
-            Ok(user)
+        // Ensure at most one user is identified by the public key.
+        if users.len() > 1 {
+            anyhow::bail!("SSH public key `{}` is used by multiple users, but a key must identify a single user unambiguously", pubkey);
         }
+
+        let user = users
+            .into_iter()
+            .last()
+            .map(|(name, attributes)| User { name, attributes })
+            .ok_or(anyhow::anyhow!(
+                "failed to find any user identified by SSH public key `{}`",
+                pubkey
+            ))?;
+
+        Ok(user)
     }
 
     let user =
@@ -159,10 +150,10 @@ other:
         let user = user?;
 
         assert!(user.name.as_str() == "other");
-        assert!(user.permissions[0].path == Path::new("/foo/bar"));
-        assert!(user.permissions[0].write == false);
-        assert!(user.permissions[1].path == Path::new("/bar/foo"));
-        assert!(user.permissions[1].write == true);
+        assert!(user.attributes.permissions[0].path == Path::new("/foo/bar"));
+        assert!(user.attributes.permissions[0].write == false);
+        assert!(user.attributes.permissions[1].path == Path::new("/bar/foo"));
+        assert!(user.attributes.permissions[1].write == true);
 
         Ok(())
     }

@@ -10,7 +10,9 @@ license = "MIT"
 [dependencies]
 anyhow = "1"
 clap = { version = "4.6", features = ["cargo"] }
+serde = { version = "1", features = ["derive"] }
 shlex = "2.0"
+strict-yaml-rust = { version = "0.2", features = ["serde"] }
 
 [package.metadata.deb]
 extended-description = "SSH-based password and secret management"
