@@ -147,9 +147,34 @@ impl Username {
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct Permission {
+    #[serde(deserialize_with = "deserialize_pathbuf")]
     pub path: PathBuf,
     #[serde(default)]
     pub write: bool,
+}
+
+/// Use this implementation to deserialize a `PathBuf` but
+/// also check for some application-specific restrictions.
+fn deserialize_pathbuf<'de, D>(deserializer: D) -> Result<PathBuf, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let path = PathBuf::deserialize(deserializer)?;
+
+    if !path.is_absolute() {
+        return Err(serde::de::Error::custom("path must be absolute"));
+    }
+
+    if path
+        .components()
+        .any(|component| !matches!(component, Component::RootDir | Component::Normal(_)))
+    {
+        return Err(serde::de::Error::custom(
+            "path must not contain relative path components",
+        ));
+    }
+
+    Ok(path)
 }
 
 /// When a user supplies a path that they would like to modify
