@@ -47,8 +47,7 @@ fn main() -> Result<(), anyhow::Error> {
 
             match error.downcast::<error::AuthenticationError>() {
                 Ok(_error) => anyhow::bail!(_error),
-                Err(_error) => {
-                    log::error(timer, None, &_error)?;
+                Err(_) => {
                     anyhow::bail!("internal server error");
                 }
             }
@@ -73,8 +72,7 @@ fn main() -> Result<(), anyhow::Error> {
 
         match error.downcast::<error::UserError>() {
             Ok(_error) => anyhow::bail!(_error),
-            Err(_error) => {
-                log::error(timer, Some(&user), &_error)?;
+            Err(_) => {
                 anyhow::bail!("internal server error");
             }
         }
