@@ -9,4 +9,5 @@ include <tunables/global>
   owner /etc/stassh/** r,
   owner /var/lib/stassh/** w,
 
+  /usr/bin/logger mr
 }
