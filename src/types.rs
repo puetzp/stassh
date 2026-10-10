@@ -19,11 +19,66 @@ pub enum Verb {
     List { path: PrefixedPath },
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct SSHKey(String);
+
+impl FromStr for SSHKey {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.is_empty() {
+            anyhow::bail!("SSH key cannot be an empty string")
+        }
+
+        let mut iter = s.split_whitespace();
+
+        let kind = iter.next().ok_or(anyhow::anyhow!(
+            "SSH key must contain a key type such as ssh-ed25519"
+        ))?;
+
+        let key = iter.next().ok_or(anyhow::anyhow!(
+            "SSH key type must be followed by the key itself"
+        ))?;
+
+        Ok(Self(format!("{} {}", kind, key)))
+    }
+}
+
+impl<'de> Deserialize<'de> for SSHKey {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer)
+            .and_then(|s| Self::from_str(&s).map_err(serde::de::Error::custom))
+    }
+}
+
+impl fmt::Display for SSHKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&*self.0, f)
+    }
+}
+
+impl Deref for SSHKey {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_str()
+    }
+}
+
+impl SSHKey {
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
 /// The user attributes contain all user information minus
 /// the user name.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct UserAttributes {
-    pub ssh_keys: Vec<String>,
+    pub ssh_keys: Vec<SSHKey>,
     #[serde(default)]
     pub permissions: Vec<Permission>,
 }

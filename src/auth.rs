@@ -75,7 +75,7 @@ pub fn authenticate(users_file: &Path) -> Result<User, anyhow::Error> {
                 users_file.display()
             ))?
             .into_iter()
-            .filter(|(_, attributes)| attributes.ssh_keys.contains(&pubkey.to_string()))
+            .filter(|(_, attributes)| attributes.ssh_keys.iter().any(|key| key.as_str() == pubkey))
             .collect();
 
         // Ensure at most one user is identified by the public key.
